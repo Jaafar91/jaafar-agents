@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -7,6 +8,7 @@ from database import init_db, get_db, Message
 
 load_dotenv()
 
+PORT = int(os.getenv("PORT", "8000"))
 app = FastAPI(title="Telegram Webhook Receiver")
 
 
@@ -46,3 +48,9 @@ def list_messages(db: Session = Depends(get_db)):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
