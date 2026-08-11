@@ -1,106 +1,25 @@
 import logging
 import os
-import re
-import subprocess
-from urllib.parse import urlparse, urlunparse
 from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import Optional
-from dotenv import load_dotenv
-from openai import OpenAI
-import requests
+from config import PORT, GITHUB_BRANCH, GITHUB_COMMIT_EMAIL, GITHUB_COMMIT_NAME, GITHUB_REPO_URL, GITHUB_TOKEN, OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder
+from openai_utils import OpenAIClient
+from github_utils import create_commit_and_push
+from telegram_utils import TelegramUpdate, send_reply
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("telegram_openai_bot")
 
-load_dotenv()
+OPENAI_CONFIGURED = not is_placeholder(OPENAI_API_KEY)
+TELEGRAM_CONFIGURED = not is_placeholder(TELEGRAM_BOT_TOKEN) and not is_placeholder(TELEGRAM_CHAT_ID)
 
-PORT = int(os.getenv("PORT", "9000"))
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GITHUB_REPO_URL = os.getenv("GITHUB_REPO_URL")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
-GITHUB_COMMIT_NAME = os.getenv("GITHUB_COMMIT_NAME", "OpenAI Bot")
-GITHUB_COMMIT_EMAIL = os.getenv("GITHUB_COMMIT_EMAIL", "bot@example.com")
-
-def _is_placeholder(value: Optional[str]) -> bool:
-    if not value:
-        return True
-    value = value.strip()
-    return value.startswith("your_") or value.endswith("_here") or value in {"", "example"}
-
-
-OPENAI_CONFIGURED = not _is_placeholder(OPENAI_API_KEY)
-TELEGRAM_CONFIGURED = not _is_placeholder(TELEGRAM_BOT_TOKEN) and not _is_placeholder(TELEGRAM_CHAT_ID)
-
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_CONFIGURED else None
 app = FastAPI(title="Telegram Webhook Receiver")
-
-
-class TelegramChat(BaseModel):
-    id: int
-    username: Optional[str] = None
-
-
-# Telegram sends nested JSON; we only need the text from message
-class TelegramMessage(BaseModel):
-    message_id: int
-    text: Optional[str] = None
-    chat: Optional[TelegramChat] = None
-
-
-class TelegramUpdate(BaseModel):
-    update_id: int
-    message: Optional[TelegramMessage] = None
+openai_client = OpenAIClient()
 
 
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
 def root():
     return {"status": "ok"}
-
-
-def _run_git_command(command, cwd):
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    return result.stdout.strip()
-
-
-def _build_repo_remote_url(repo_url: str, token: Optional[str] = None) -> str:
-    if not token or not repo_url.startswith("https://"):
-        return repo_url
-
-    parsed = urlparse(repo_url)
-    if parsed.netloc.startswith("github.com"):
-        netloc = f"x-access-token:{token}@github.com"
-    else:
-        netloc = f"x-access-token:{token}@{parsed.netloc}"
-    return urlunparse(parsed._replace(netloc=netloc))
-
-
-def _extract_code_from_reply(reply: str) -> str:
-    code_blocks = re.findall(r"```(?:\w+)?\s*(.*?)```", reply, re.DOTALL)
-    if code_blocks:
-        return "\n\n".join(block.strip() for block in code_blocks if block.strip())
-
-    lines = [line.strip() for line in reply.splitlines() if line.strip()]
-    if not lines:
-        return ""
-
-    code_like_lines = []
-    for line in lines:
-        if any(token in line for token in ["def ", "class ", "import ", "from ", "return ", "if ", "for ", "while ", "print(", "#"]):
-            code_like_lines.append(line)
-        elif line.startswith(("- ", "* ")):
-            continue
-    if code_like_lines:
-        return "\n".join(code_like_lines)
-
-    return ""
 
 
 @app.post("/telegram/webhook")
@@ -119,45 +38,21 @@ def telegram_webhook(update: TelegramUpdate):
         return {"ok": False, "error": "OpenAI API key is not configured. Set OPENAI_API_KEY in the .env file."}
 
     try:
-        logger.info("Calling OpenAI with model %s", OPENAI_MODEL)
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            input=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant for a Telegram bot that can also help manage a GitHub repository.",
-                },
-                {"role": "user", "content": text},
-            ],
-        )
-        logger.info("OpenAI response received")
+        reply = openai_client.get_reply(text)
+        logger.info("OpenAI reply: %s", reply)
     except Exception as exc:
         logger.exception("OpenAI request failed")
         return {"ok": False, "error": f"OpenAI request failed: {exc}"}
 
-    reply = response.output_text
-    logger.info("OpenAI reply: %s", reply)
-
     chat_id = None
     if update.message and update.message.chat:
         chat_id = update.message.chat.id
-
     if not chat_id and TELEGRAM_CHAT_ID:
         chat_id = TELEGRAM_CHAT_ID
 
     if TELEGRAM_CONFIGURED:
         try:
-            logger.info("Sending reply to Telegram chat %s", chat_id)
-            payload = {"chat_id": chat_id, "text": reply}
-            response_tg = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json=payload,
-                timeout=10,
-            )
-            logger.info("Telegram API response: %s %s", response_tg.status_code, response_tg.text)
-            if response_tg.status_code != 200:
-                logger.error("Telegram send returned non-200 response: %s", response_tg.text)
-                return {"ok": False, "error": f"Telegram send failed: {response_tg.text}"}
+            send_reply(logger, chat_id, reply)
         except Exception as exc:
             logger.exception("Telegram send failed")
             return {"ok": False, "error": f"Telegram send failed: {exc}"}
@@ -165,53 +60,46 @@ def telegram_webhook(update: TelegramUpdate):
         logger.error("Telegram bot credentials are not configured")
         return {"ok": False, "error": "Telegram bot credentials are not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the .env file."}
 
+    github_link = None
     if GITHUB_REPO_URL:
         repo_dir = os.path.join(os.getcwd(), "repo")
         os.makedirs(repo_dir, exist_ok=True)
-        remote_url = _build_repo_remote_url(GITHUB_REPO_URL, GITHUB_TOKEN)
         logger.info("GitHub repo URL configured: %s", GITHUB_REPO_URL)
 
-        if not os.path.exists(os.path.join(repo_dir, ".git")):
-            logger.info("Cloning repository into %s", repo_dir)
-            _run_git_command(["git", "clone", remote_url, repo_dir], os.getcwd())
+        code_content = openai_client.extract_code_from_reply(reply)
+        if code_content:
+            content = f"\n\n## OpenAI Bot Update\n**Prompt:** {text}\n\n```\n{code_content}\n```\n"
+            try:
+                github_link = create_commit_and_push(
+                    repo_dir=repo_dir,
+                    repo_url=GITHUB_REPO_URL,
+                    token=GITHUB_TOKEN,
+                    branch=GITHUB_BRANCH,
+                    commit_name=GITHUB_COMMIT_NAME,
+                    commit_email=GITHUB_COMMIT_EMAIL,
+                    file_path="README.md",
+                    content=content,
+                    logger=logger,
+                )
+                logger.info("GitHub update completed: %s", github_link)
+            except Exception as exc:
+                logger.exception("GitHub push failed")
+                return {"ok": False, "error": f"GitHub push failed: {exc}"}
         else:
-            logger.info("Updating remote URL for repository in %s", repo_dir)
-            _run_git_command(["git", "remote", "set-url", "origin", remote_url], repo_dir)
-
-        try:
-            logger.info("Checking out branch %s", GITHUB_BRANCH)
-            _run_git_command(["git", "checkout", GITHUB_BRANCH], repo_dir)
-        except RuntimeError:
-            logger.warning("Branch %s does not exist, creating it", GITHUB_BRANCH)
-            _run_git_command(["git", "checkout", "-b", GITHUB_BRANCH], repo_dir)
-
-        code_content = _extract_code_from_reply(reply)
-        if not code_content:
             logger.info("No code-like content detected in OpenAI reply; skipping repo write")
-            return {"ok": True, "reply": reply, "github": "skipped"}
 
-        readme_path = os.path.join(repo_dir, "README.md")
-        with open(readme_path, "a", encoding="utf-8") as f:
-            f.write("\n\n## OpenAI Bot Update\n")
-            f.write(f"**Prompt:** {text}\n\n")
-            f.write("```\n")
-            f.write(code_content)
-            f.write("\n```\n")
+    response_text = reply
+    if github_link:
+        response_text = f"{reply}\n\nGitHub commit: {github_link}"
 
-        _run_git_command(["git", "config", "user.name", GITHUB_COMMIT_NAME], repo_dir)
-        _run_git_command(["git", "config", "user.email", GITHUB_COMMIT_EMAIL], repo_dir)
-        _run_git_command(["git", "add", "README.md"], repo_dir)
-        _run_git_command(["git", "commit", "-m", "Update from OpenAI bot"], repo_dir)
-
-        try:
-            logger.info("Pushing to GitHub branch %s", GITHUB_BRANCH)
-            _run_git_command(["git", "push", "origin", GITHUB_BRANCH], repo_dir)
-        except RuntimeError as exc:
-            logger.exception("GitHub push failed")
-            return {"ok": False, "error": f"GitHub push failed: {exc}"}
+    try:
+        send_reply(logger, chat_id, response_text)
+    except Exception as exc:
+        logger.exception("Telegram follow-up send failed")
+        return {"ok": False, "error": f"Telegram follow-up send failed: {exc}"}
 
     logger.info("Request completed successfully")
-    return {"ok": True, "reply": reply}
+    return {"ok": True, "reply": reply, "github_link": github_link}
 
 
 @app.get("/health")
