@@ -156,9 +156,13 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
         logger.info("No repository patch content received; skipping commit and push")
         return None
 
+    resolved_target = _resolve_repo_path(repo_dir, file_path)
+    if not resolved_target:
+        resolved_target = file_path
+
     run_git_command(["git", "config", "user.name", commit_name], repo_dir)
     run_git_command(["git", "config", "user.email", commit_email], repo_dir)
-    run_git_command(["git", "add", file_path], repo_dir)
+    run_git_command(["git", "add", resolved_target], repo_dir)
     commit_message = _summarize_change(content, content)
     run_git_command(["git", "commit", "-m", commit_message], repo_dir)
     run_git_command(["git", "push", "origin", branch], repo_dir)
