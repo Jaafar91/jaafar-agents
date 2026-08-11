@@ -1,9 +1,10 @@
 import logging
 import os
+import re
 from fastapi import FastAPI
 from config import PORT, GITHUB_BRANCH, GITHUB_COMMIT_EMAIL, GITHUB_COMMIT_NAME, GITHUB_REPO_URL, GITHUB_TOKEN, OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder
 from openai_utils import OpenAIClient
-from github_utils import create_commit_and_push
+from github_utils import create_commit_and_push, delete_file_and_push
 from telegram_utils import TelegramUpdate, send_reply
 
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +15,27 @@ TELEGRAM_CONFIGURED = not is_placeholder(TELEGRAM_BOT_TOKEN) and not is_placehol
 
 app = FastAPI(title="Telegram Webhook Receiver")
 openai_client = OpenAIClient()
+
+
+def is_delete_request(text):
+    lowered = (text or "").lower()
+    if any(token in lowered for token in ["delete", "remove", "drop", "erase", "clear"]):
+        return not any(phrase in lowered for phrase in ["don't delete", "do not delete", "not delete", "not remove"])
+    return False
+
+
+def extract_delete_target(text):
+    if not is_delete_request(text):
+        return None
+
+    match = re.search(r"\b(?:delete|remove|drop|erase|clear)\s+(?:file\s+)?(?:named\s+)?([a-zA-Z0-9._/-]+)", (text or "").lower())
+    if not match:
+        return None
+
+    target = match.group(1).strip()
+    if target in {"repo", "repository", "project"}:
+        return None
+    return target
 
 
 @app.get("/", include_in_schema=False)
@@ -61,32 +83,48 @@ def telegram_webhook(update: TelegramUpdate):
         return {"ok": False, "error": "Telegram bot credentials are not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the .env file."}
 
     github_link = None
+    delete_target = extract_delete_target(text)
     if GITHUB_REPO_URL:
         repo_dir = os.path.join(os.getcwd(), "repo")
         os.makedirs(repo_dir, exist_ok=True)
         logger.info("GitHub repo URL configured: %s", GITHUB_REPO_URL)
 
-        code_content = openai_client.extract_code_from_reply(reply)
-        if code_content:
-            content = f"\n\n## OpenAI Bot Update\n**Prompt:** {text}\n\n```\n{code_content}\n```\n"
+        if delete_target:
             try:
-                github_link = create_commit_and_push(
+                github_link = delete_file_and_push(
                     repo_dir=repo_dir,
                     repo_url=GITHUB_REPO_URL,
                     token=GITHUB_TOKEN,
                     branch=GITHUB_BRANCH,
                     commit_name=GITHUB_COMMIT_NAME,
                     commit_email=GITHUB_COMMIT_EMAIL,
-                    file_path="README.md",
-                    content=content,
+                    file_path=delete_target,
                     logger=logger,
                 )
-                logger.info("GitHub update completed: %s", github_link)
+                logger.info("GitHub delete completed: %s", github_link)
             except Exception as exc:
-                logger.exception("GitHub push failed")
-                return {"ok": False, "error": f"GitHub push failed: {exc}"}
-        else:
-            logger.info("No code-like content detected in OpenAI reply; skipping repo write")
+                logger.exception("GitHub delete failed")
+                return {"ok": False, "error": f"GitHub delete failed: {exc}"}
+        elif not is_delete_request(text):
+            code_content = openai_client.extract_code_from_reply(reply)
+            if code_content:
+                content = f"\n\n## OpenAI Bot Update\n**Prompt:** {text}\n\n```\n{code_content}\n```\n"
+                try:
+                    github_link = create_commit_and_push(
+                        repo_dir=repo_dir,
+                        repo_url=GITHUB_REPO_URL,
+                        token=GITHUB_TOKEN,
+                        branch=GITHUB_BRANCH,
+                        commit_name=GITHUB_COMMIT_NAME,
+                        commit_email=GITHUB_COMMIT_EMAIL,
+                        file_path="README.md",
+                        content=content,
+                        logger=logger,
+                    )
+                    logger.info("GitHub update completed: %s", github_link)
+                except Exception as exc:
+                    logger.exception("GitHub push failed")
+                    return {"ok": False, "error": f"GitHub push failed: {exc}"}
 
     response_text = reply
     if github_link:

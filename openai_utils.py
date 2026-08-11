@@ -13,7 +13,8 @@ class OpenAIClient:
 
         instruction = (
             "Return unified diff only. No markdown fences. No explanations. "
-            "The diff must be applicable with `git apply`."
+            "The diff must be applicable with `git apply`. "
+            "If the request is to delete, remove, erase, or clear content, respond with the single word: Ignored."
         )
         response = self.client.responses.create(
             model=OPENAI_MODEL,

@@ -44,6 +44,29 @@ def _summarize_change(prompt, code_content):
     return "Update from OpenAI bot"
 
 
+def _resolve_repo_path(repo_dir, file_path):
+    normalized = os.path.normpath(file_path).replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized in {"", "."}:
+        return None
+
+    target_path = os.path.join(repo_dir, normalized)
+    if os.path.exists(target_path):
+        return normalized
+
+    repo_root = repo_dir
+    entries = []
+    for entry in os.listdir(repo_root):
+        if entry.lower() == normalized.lower():
+            return entry
+        if normalized.lower().endswith(entry.lower()):
+            entries.append(entry)
+    if len(entries) == 1:
+        return entries[0]
+    return normalized
+
+
 def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commit_email, file_path, content, logger):
     remote_url = build_repo_remote_url(repo_url, token)
     if not os.path.exists(os.path.join(repo_dir, ".git")):
@@ -79,6 +102,39 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
     run_git_command(["git", "add", file_path], repo_dir)
     commit_message = _summarize_change(content, content)
     run_git_command(["git", "commit", "-m", commit_message], repo_dir)
+    run_git_command(["git", "push", "origin", branch], repo_dir)
+
+    return "https://github.com/" + repo_url.split("github.com/")[-1].replace(".git", "") + "/commit/HEAD"
+
+
+def delete_file_and_push(repo_dir, repo_url, token, branch, commit_name, commit_email, file_path, logger):
+    remote_url = build_repo_remote_url(repo_url, token)
+    if not os.path.exists(os.path.join(repo_dir, ".git")):
+        logger.info("Cloning repository into %s", repo_dir)
+        run_git_command(["git", "clone", remote_url, repo_dir], os.getcwd())
+    else:
+        logger.info("Updating remote URL for repository in %s", repo_dir)
+        run_git_command(["git", "remote", "set-url", "origin", remote_url], repo_dir)
+
+    try:
+        logger.info("Checking out branch %s", branch)
+        run_git_command(["git", "checkout", branch], repo_dir)
+    except RuntimeError:
+        logger.warning("Branch %s does not exist, creating it", branch)
+        run_git_command(["git", "checkout", "-b", branch], repo_dir)
+
+    resolved_path = _resolve_repo_path(repo_dir, file_path)
+    if not resolved_path:
+        raise RuntimeError("No file path provided for deletion")
+
+    absolute_path = os.path.join(repo_dir, resolved_path)
+    if not os.path.exists(absolute_path):
+        raise RuntimeError(f"File not found: {resolved_path}")
+
+    run_git_command(["git", "rm", "--ignore-unmatch", resolved_path], repo_dir)
+    run_git_command(["git", "config", "user.name", commit_name], repo_dir)
+    run_git_command(["git", "config", "user.email", commit_email], repo_dir)
+    run_git_command(["git", "commit", "-m", f"Delete {resolved_path}"], repo_dir)
     run_git_command(["git", "push", "origin", branch], repo_dir)
 
     return "https://github.com/" + repo_url.split("github.com/")[-1].replace(".git", "") + "/commit/HEAD"
