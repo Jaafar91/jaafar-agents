@@ -67,6 +67,19 @@ def _resolve_repo_path(repo_dir, file_path):
     return normalized
 
 
+def _normalize_git_patch(patch_text):
+    if not patch_text:
+        return ""
+
+    normalized = patch_text.strip()
+
+    def replace_header(match):
+        return f"{match.group(1)}{match.group(2)},{match.group(2)}{match.group(3)}"
+
+    normalized = re.sub(r"(@@ -\d+(?:,\d+)? \+)(\d+)( @@)", replace_header, normalized)
+    return normalized
+
+
 def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commit_email, file_path, content, logger):
     remote_url = build_repo_remote_url(repo_url, token)
     if not os.path.exists(os.path.join(repo_dir, ".git")):
@@ -84,9 +97,10 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
         run_git_command(["git", "checkout", "-b", branch], repo_dir)
 
     if content and content.strip():
+        normalized_content = _normalize_git_patch(content)
         patch_path = os.path.join(repo_dir, "pending.patch")
         with open(patch_path, "w", encoding="utf-8") as patch_file:
-            patch_file.write(content)
+            patch_file.write(normalized_content)
 
         try:
             run_git_command(["git", "apply", "--index", patch_path], repo_dir)
