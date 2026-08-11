@@ -100,6 +100,10 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
             if os.path.exists(patch_path):
                 os.remove(patch_path)
 
+    if not content or not content.strip():
+        logger.info("No repository patch content received; skipping commit and push")
+        return None
+
     run_git_command(["git", "config", "user.name", commit_name], repo_dir)
     run_git_command(["git", "config", "user.email", commit_email], repo_dir)
     run_git_command(["git", "add", file_path], repo_dir)
