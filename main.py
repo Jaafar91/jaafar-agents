@@ -34,7 +34,7 @@ def root():
     return {"status": "ok"}
 
 
-@app.post("/webhook")
+@app.post("/telegram/webhook")
 def telegram_webhook(update: TelegramUpdate, db: Session = Depends(get_db)):
     text = update.message.text if update.message else None
 
@@ -46,7 +46,7 @@ def telegram_webhook(update: TelegramUpdate, db: Session = Depends(get_db)):
     return {"ok": True, "id": record.id}
 
 
-@app.get("/messages")
+@app.get("/telegram/messages")
 def list_messages(db: Session = Depends(get_db)):
     return db.query(Message).all()
 
