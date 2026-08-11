@@ -46,7 +46,7 @@ class OpenAIClient:
                 "new file mode 100644",
                 "--- /dev/null",
                 f"+++ b/{target}",
-                f"@@ -0,0 +{len(additions)} @@",
+                f"@@ -0,0 +1,{len(additions)} @@",
             ]
             patch_lines.extend(additions)
             return "\n".join(patch_lines)
