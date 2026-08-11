@@ -39,10 +39,16 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_CONFIGURED else None
 app = FastAPI(title="Telegram Webhook Receiver")
 
 
+class TelegramChat(BaseModel):
+    id: int
+    username: Optional[str] = None
+
+
 # Telegram sends nested JSON; we only need the text from message
 class TelegramMessage(BaseModel):
     message_id: int
     text: Optional[str] = None
+    chat: Optional[TelegramChat] = None
 
 
 class TelegramUpdate(BaseModel):
@@ -110,15 +116,26 @@ def telegram_webhook(update: TelegramUpdate):
     reply = response.output_text
     logger.info("OpenAI reply: %s", reply)
 
+    chat_id = None
+    if update.message and update.message.chat:
+        chat_id = update.message.chat.id
+
+    if not chat_id and TELEGRAM_CHAT_ID:
+        chat_id = TELEGRAM_CHAT_ID
+
     if TELEGRAM_CONFIGURED:
         try:
-            logger.info("Sending reply to Telegram chat %s", TELEGRAM_CHAT_ID)
+            logger.info("Sending reply to Telegram chat %s", chat_id)
+            payload = {"chat_id": chat_id, "text": reply}
             response_tg = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": TELEGRAM_CHAT_ID, "text": reply},
+                json=payload,
                 timeout=10,
             )
             logger.info("Telegram API response: %s %s", response_tg.status_code, response_tg.text)
+            if response_tg.status_code != 200:
+                logger.error("Telegram send returned non-200 response: %s", response_tg.text)
+                return {"ok": False, "error": f"Telegram send failed: {response_tg.text}"}
         except Exception as exc:
             logger.exception("Telegram send failed")
             return {"ok": False, "error": f"Telegram send failed: {exc}"}
