@@ -106,9 +106,7 @@ def telegram_webhook(update: TelegramUpdate):
                 logger.exception("GitHub delete failed")
                 return {"ok": False, "error": f"GitHub delete failed: {exc}"}
         elif not is_delete_request(text):
-            code_content = openai_client.extract_code_from_reply(reply)
-            if code_content:
-                content = f"\n\n## OpenAI Bot Update\n**Prompt:** {text}\n\n```\n{code_content}\n```\n"
+            if reply and reply != "Ignored":
                 try:
                     github_link = create_commit_and_push(
                         repo_dir=repo_dir,
@@ -118,7 +116,7 @@ def telegram_webhook(update: TelegramUpdate):
                         commit_name=GITHUB_COMMIT_NAME,
                         commit_email=GITHUB_COMMIT_EMAIL,
                         file_path="README.md",
-                        content=content,
+                        content=reply,
                         logger=logger,
                     )
                     logger.info("GitHub update completed: %s", github_link)

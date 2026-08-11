@@ -92,6 +92,9 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
             run_git_command(["git", "apply", "--index", patch_path], repo_dir)
         except RuntimeError as exc:
             logger.warning("git apply failed: %s", exc)
+            if "No valid patches in input" in str(exc):
+                logger.info("No valid patch content received; skipping repository patch application")
+                return None
             raise
         finally:
             if os.path.exists(patch_path):
