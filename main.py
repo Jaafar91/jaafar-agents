@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import subprocess
 from urllib.parse import urlparse, urlunparse
 from fastapi import FastAPI
@@ -79,6 +80,27 @@ def _build_repo_remote_url(repo_url: str, token: Optional[str] = None) -> str:
     else:
         netloc = f"x-access-token:{token}@{parsed.netloc}"
     return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _extract_code_from_reply(reply: str) -> str:
+    code_blocks = re.findall(r"```(?:\w+)?\s*(.*?)```", reply, re.DOTALL)
+    if code_blocks:
+        return "\n\n".join(block.strip() for block in code_blocks if block.strip())
+
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    code_like_lines = []
+    for line in lines:
+        if any(token in line for token in ["def ", "class ", "import ", "from ", "return ", "if ", "for ", "while ", "print(", "#"]):
+            code_like_lines.append(line)
+        elif line.startswith(("- ", "* ")):
+            continue
+    if code_like_lines:
+        return "\n".join(code_like_lines)
+
+    return ""
 
 
 @app.post("/telegram/webhook")
@@ -163,11 +185,18 @@ def telegram_webhook(update: TelegramUpdate):
             logger.warning("Branch %s does not exist, creating it", GITHUB_BRANCH)
             _run_git_command(["git", "checkout", "-b", GITHUB_BRANCH], repo_dir)
 
+        code_content = _extract_code_from_reply(reply)
+        if not code_content:
+            logger.info("No code-like content detected in OpenAI reply; skipping repo write")
+            return {"ok": True, "reply": reply, "github": "skipped"}
+
         readme_path = os.path.join(repo_dir, "README.md")
         with open(readme_path, "a", encoding="utf-8") as f:
             f.write("\n\n## OpenAI Bot Update\n")
             f.write(f"**Prompt:** {text}\n\n")
-            f.write(f"{reply}\n")
+            f.write("```\n")
+            f.write(code_content)
+            f.write("\n```\n")
 
         _run_git_command(["git", "config", "user.name", GITHUB_COMMIT_NAME], repo_dir)
         _run_git_command(["git", "config", "user.email", GITHUB_COMMIT_EMAIL], repo_dir)
