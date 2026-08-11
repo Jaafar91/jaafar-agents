@@ -28,6 +28,12 @@ class TelegramUpdate(BaseModel):
     message: Optional[TelegramMessage] = None
 
 
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+def root():
+    return {"status": "ok"}
+
+
 @app.post("/webhook")
 def telegram_webhook(update: TelegramUpdate, db: Session = Depends(get_db)):
     text = update.message.text if update.message else None
