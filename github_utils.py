@@ -156,7 +156,9 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
         logger.info("No repository patch content received; skipping commit and push")
         return None
 
-    resolved_target = _resolve_repo_path(repo_dir, file_path)
+    resolved_target = _extract_new_file_target(content)
+    if not resolved_target:
+        resolved_target = _resolve_repo_path(repo_dir, file_path)
     if not resolved_target:
         resolved_target = file_path
 
