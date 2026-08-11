@@ -60,8 +60,19 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
         logger.warning("Branch %s does not exist, creating it", branch)
         run_git_command(["git", "checkout", "-b", branch], repo_dir)
 
-    with open(os.path.join(repo_dir, file_path), "a", encoding="utf-8") as f:
-        f.write(content)
+    if content and content.strip():
+        patch_path = os.path.join(repo_dir, "pending.patch")
+        with open(patch_path, "w", encoding="utf-8") as patch_file:
+            patch_file.write(content)
+
+        try:
+            run_git_command(["git", "apply", "--index", patch_path], repo_dir)
+        except RuntimeError as exc:
+            logger.warning("git apply failed: %s", exc)
+            raise
+        finally:
+            if os.path.exists(patch_path):
+                os.remove(patch_path)
 
     run_git_command(["git", "config", "user.name", commit_name], repo_dir)
     run_git_command(["git", "config", "user.email", commit_email], repo_dir)
