@@ -64,7 +64,10 @@ def _build_repo_remote_url(repo_url: str, token: Optional[str] = None) -> str:
         return repo_url
 
     parsed = urlparse(repo_url)
-    netloc = f"x-access-token:{token}@{parsed.netloc}"
+    if parsed.netloc.startswith("github.com"):
+        netloc = f"x-access-token:{token}@github.com"
+    else:
+        netloc = f"x-access-token:{token}@{parsed.netloc}"
     return urlunparse(parsed._replace(netloc=netloc))
 
 
@@ -128,7 +131,11 @@ def telegram_webhook(update: TelegramUpdate):
         _run_git_command(["git", "config", "user.email", GITHUB_COMMIT_EMAIL], repo_dir)
         _run_git_command(["git", "add", "README.md"], repo_dir)
         _run_git_command(["git", "commit", "-m", "Update from OpenAI bot"], repo_dir)
-        _run_git_command(["git", "push", "origin", GITHUB_BRANCH], repo_dir)
+
+        try:
+            _run_git_command(["git", "push", "origin", GITHUB_BRANCH], repo_dir)
+        except RuntimeError as exc:
+            return {"ok": False, "error": f"GitHub push failed: {exc}"}
 
     return {"ok": True, "reply": reply}
 
