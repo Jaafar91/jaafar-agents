@@ -11,6 +11,10 @@ class OpenAIClient:
         if not self.client:
             raise RuntimeError("OpenAI API key is not configured")
 
+        instruction = (
+            "Return unified diff only. No markdown fences. No explanations. "
+            "The diff must be applicable with `git apply`."
+        )
         response = self.client.responses.create(
             model=OPENAI_MODEL,
             input=[
@@ -18,7 +22,7 @@ class OpenAIClient:
                     "role": "system",
                     "content": "You are a helpful assistant for a Telegram bot that can also help manage a GitHub repository.",
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": f"{instruction}\n\n{prompt}"},
             ],
         )
         return response.output_text
