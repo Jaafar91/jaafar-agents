@@ -80,6 +80,28 @@ def _normalize_git_patch(patch_text):
     return normalized
 
 
+def _extract_new_file_target(patch_text):
+    if not patch_text:
+        return None
+
+    lines = [line.strip() for line in patch_text.splitlines() if line.strip()]
+    if len(lines) < 5:
+        return None
+
+    if not lines[0].startswith("diff --git"):
+        return None
+
+    try:
+        target = lines[0].split(" a/", 1)[1].split(" b/", 1)[0]
+    except IndexError:
+        return None
+
+    if target.startswith("/"):
+        return None
+
+    return target
+
+
 def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commit_email, file_path, content, logger):
     remote_url = build_repo_remote_url(repo_url, token)
     if not os.path.exists(os.path.join(repo_dir, ".git")):
@@ -109,7 +131,23 @@ def create_commit_and_push(repo_dir, repo_url, token, branch, commit_name, commi
             if "No valid patches in input" in str(exc):
                 logger.info("No valid patch content received; skipping repository patch application")
                 return None
-            raise
+            target = _extract_new_file_target(normalized_content)
+            if target:
+                logger.info("Falling back to direct file write for %s", target)
+                target_path = os.path.join(repo_dir, target)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                file_lines = []
+                for line in normalized_content.splitlines():
+                    if line.startswith("+") and not line.startswith("+++ "):
+                        file_lines.append(line[1:])
+                if file_lines:
+                    with open(target_path, "w", encoding="utf-8") as target_file:
+                        target_file.write("\n".join(file_lines) + "\n")
+                else:
+                    with open(target_path, "w", encoding="utf-8") as target_file:
+                        target_file.write("")
+            else:
+                raise
         finally:
             if os.path.exists(patch_path):
                 os.remove(patch_path)
