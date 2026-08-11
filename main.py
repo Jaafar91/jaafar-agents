@@ -8,7 +8,7 @@ from database import init_db, get_db, Message
 
 load_dotenv()
 
-PORT = int(os.getenv("PORT", "8000"))
+PORT = int(os.getenv("PORT", "9000"))
 app = FastAPI(title="Telegram Webhook Receiver")
 
 
