@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
 from openai import OpenAI
+import requests
 
 load_dotenv()
 
@@ -20,10 +21,17 @@ GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 GITHUB_COMMIT_NAME = os.getenv("GITHUB_COMMIT_NAME", "OpenAI Bot")
 GITHUB_COMMIT_EMAIL = os.getenv("GITHUB_COMMIT_EMAIL", "bot@example.com")
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY must be set in the .env file")
+def _is_placeholder(value: Optional[str]) -> bool:
+    if not value:
+        return True
+    value = value.strip()
+    return value.startswith("your_") or value.endswith("_here") or value in {"", "example"}
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+OPENAI_CONFIGURED = not _is_placeholder(OPENAI_API_KEY)
+TELEGRAM_CONFIGURED = not _is_placeholder(TELEGRAM_BOT_TOKEN) and not _is_placeholder(TELEGRAM_CHAT_ID)
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_CONFIGURED else None
 app = FastAPI(title="Telegram Webhook Receiver")
 
 
@@ -67,27 +75,36 @@ def telegram_webhook(update: TelegramUpdate):
     if not text:
         return {"ok": False, "error": "No message text provided"}
 
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        input=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant for a Telegram bot that can also help manage a GitHub repository.",
-            },
-            {"role": "user", "content": text},
-        ],
-    )
+    if not OPENAI_CONFIGURED:
+        return {"ok": False, "error": "OpenAI API key is not configured. Set OPENAI_API_KEY in the .env file."}
+
+    try:
+        response = client.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant for a Telegram bot that can also help manage a GitHub repository.",
+                },
+                {"role": "user", "content": text},
+            ],
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"OpenAI request failed: {exc}"}
 
     reply = response.output_text
 
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        import requests
-
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": reply},
-            timeout=10,
-        )
+    if TELEGRAM_CONFIGURED:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": reply},
+                timeout=10,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Telegram send failed: {exc}"}
+    else:
+        return {"ok": False, "error": "Telegram bot credentials are not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the .env file."}
 
     if GITHUB_REPO_URL:
         repo_dir = os.path.join(os.getcwd(), "repo")
@@ -118,7 +135,11 @@ def telegram_webhook(update: TelegramUpdate):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "openai_configured": OPENAI_CONFIGURED,
+        "telegram_configured": TELEGRAM_CONFIGURED,
+    }
 
 
 if __name__ == "__main__":
