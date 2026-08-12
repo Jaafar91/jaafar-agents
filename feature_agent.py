@@ -109,6 +109,14 @@ class FeatureAgent:
 
     def approve_and_merge(self, number):
         self._check_config()
+        ready = requests.patch(
+            "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number),
+            headers=self._headers(),
+            json={"draft": False},
+            timeout=20,
+        )
+        if ready.status_code != 200:
+            raise RuntimeError("GitHub could not mark this PR ready for review")
         response = requests.put(
             "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number) + "/merge",
             headers=self._headers(),
