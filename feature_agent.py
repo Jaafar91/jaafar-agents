@@ -61,6 +61,39 @@ class FeatureAgent:
             total += len(text)
         return "".join(chunks)
 
+    def _apply_patch_with_repair(self, repo, env, patch, prompt, context, temp):
+        patch_file = Path(temp) / "feature.patch"
+        error = ""
+        for attempt in range(2):
+            patch_file.write_text(patch, encoding="utf-8")
+            check = subprocess.run(
+                ["git", "apply", "--check", str(patch_file)],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if check.returncode == 0:
+                self._run(["git", "apply", "--index", str(patch_file)], repo, env)
+                return
+            error = check.stderr.strip() or check.stdout.strip() or "unknown git apply error"
+            if attempt == 0:
+                self.logger.warning("Generated patch failed validation; requesting one repair: %s", error)
+                repair_prompt = (
+                    "Your previous patch failed git apply validation with this error:\n" + error + "\n\n"
+                    "Return a complete corrected unified diff only. Every changed file must include "
+                    "a diff --git header, --- and +++ lines, and valid @@ hunk headers. "
+                    "Do not include explanations or Markdown fences.\n\n"
+                    "Original task:\n" + prompt + "\n\n"
+                    "Previous invalid patch:\n" + patch + "\n\n"
+                    "Repository context:\n" + context
+                )
+                patch = OpenAIClient().get_reply(repair_prompt)
+                if not patch or patch == "Ignored":
+                    break
+        raise RuntimeError("Generated patch was invalid after repair attempt: " + error)
+
     def create_draft_pr(self, request):
         self._check_config()
         request = request.strip()
@@ -73,20 +106,19 @@ class FeatureAgent:
             repo = Path(temp) / "android-app"
             self._run(["git", "clone", "--depth", "1", "https://github.com/" + MOBILE_APP_REPOSITORY + ".git", str(repo)], temp, env)
             self._run(["git", "checkout", "-b", branch], repo, env)
+            context = self._context(repo)
             prompt = (
                 "Implement this Android feature: " + request + "\n"
-                "Return only a valid unified diff. Only edit app/src/ or app/build.gradle.kts. "
+                "Return only a valid unified diff. Every changed file must have diff --git, --- , "
+                "+++ , and valid @@ headers. Only edit app/src/ or app/build.gradle.kts. "
                 "Never edit secrets, Gradle wrappers, settings, permissions, networking, or GitHub workflows. "
                 "Do not delete existing functionality. Use existing Kotlin Jetpack Compose style.\n"
-                "Repository context:" + self._context(repo)
+                "Repository context:" + context
             )
             patch = OpenAIClient().get_reply(prompt)
             if not patch or patch == "Ignored":
                 raise RuntimeError("No usable patch was generated")
-            patch_file = Path(temp) / "feature.patch"
-            patch_file.write_text(patch, encoding="utf-8")
-            self._run(["git", "apply", "--check", str(patch_file)], repo, env)
-            self._run(["git", "apply", "--index", str(patch_file)], repo, env)
+            self._apply_patch_with_repair(repo, env, patch, prompt, context, temp)
             changed = self._run(["git", "diff", "--cached", "--name-only"], repo, env).splitlines()
             forbidden = [name for name in changed if name not in ALLOWED_FILES and not name.startswith(ALLOWED_PREFIXES)]
             if not changed or forbidden:
