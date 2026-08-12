@@ -14,6 +14,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 GITHUB_COMMIT_NAME = os.getenv("GITHUB_COMMIT_NAME", "OpenAI Bot")
 GITHUB_COMMIT_EMAIL = os.getenv("GITHUB_COMMIT_EMAIL", "bot@example.com")
+MOBILE_APP_REPOSITORY = os.getenv("MOBILE_APP_REPOSITORY", "Jaafar91/jaafar-open-ai")
 
 
 def is_placeholder(value):
