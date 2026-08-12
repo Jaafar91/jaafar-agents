@@ -1,13 +1,15 @@
+import json
 import logging
 
 import requests
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from config import GITHUB_TOKEN, MOBILE_APP_REPOSITORY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder, telegram_admin_chat_ids
 from database import get_db, init_db
+from github_webhook import notification_text, send_notification, signature_is_valid
 from mobile_config import read_config, set_enabled, set_message
 from telegram_utils import TelegramUpdate, send_reply
 
@@ -62,8 +64,9 @@ def create_feature_request_in_background(chat_id: int, request: str) -> None:
         logger,
         chat_id,
         "Feature request #" + str(issue["number"]) + " created:\n" + issue["html_url"] +
-        "\n\nOpen this issue in Codex on your computer and ask it to implement the feature as a tested PR.",
+        "\n\nI will also send PR and Android build updates here after the GitHub webhook is configured.",
     )
+
 
 def command_reply(text: str, db: Session) -> str | None:
     command, _, argument = text.strip().partition(" ")
@@ -144,6 +147,29 @@ def telegram_webhook(update: TelegramUpdate, background_tasks: BackgroundTasks, 
 
     send_reply(logger, chat_id, reply)
     return {"ok": True, "reply": reply}
+
+
+@app.post("/github/webhook", status_code=204)
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(...),
+    x_hub_signature_256: str | None = Header(default=None),
+):
+    body = await request.body()
+    if not signature_is_valid(body, x_hub_signature_256):
+        logger.warning("Rejected GitHub webhook with an invalid signature")
+        raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid GitHub webhook payload") from exc
+
+    text = notification_text(x_github_event, payload)
+    if text:
+        send_notification(logger, text)
+
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":
