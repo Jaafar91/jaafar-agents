@@ -1,12 +1,13 @@
 import logging
+
+import requests
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder, telegram_admin_chat_ids
+from config import GITHUB_TOKEN, MOBILE_APP_REPOSITORY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder, telegram_admin_chat_ids
 from database import get_db, init_db
-from feature_agent import FeatureAgent
 from mobile_config import read_config, set_enabled, set_message
 from telegram_utils import TelegramUpdate, send_reply
 
@@ -29,14 +30,40 @@ def is_authorized(chat_id: int | None) -> bool:
     return chat_id is not None and str(chat_id) in telegram_admin_chat_ids()
 
 
-def create_feature_in_background(chat_id: int, request: str) -> None:
-    try:
-        number, url = FeatureAgent(logger).create_draft_pr(request)
-        send_reply(logger, chat_id, "Draft PR #" + str(number) + " is ready for review:\n" + url + "\n\nWhen you approve it, send /approve " + str(number) + ".")
-    except Exception:
-        logger.exception("Telegram feature generation failed")
-        send_reply(logger, chat_id, "Feature generation failed. No PR was created; check the Render logs.")
+def create_feature_request_in_background(chat_id: int, request: str) -> None:
+    if is_placeholder(GITHUB_TOKEN):
+        send_reply(logger, chat_id, "GitHub is not configured. Set GITHUB_TOKEN in Render.")
+        return
 
+    response = requests.post(
+        "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/issues",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + GITHUB_TOKEN,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={
+            "title": "Telegram feature: " + request[:72],
+            "body": (
+                "Feature request received from an authorized Telegram administrator.\n\n"
+                "## Request\n" + request + "\n\n"
+                "Create and test a pull request from this issue. Do not merge until the Android build passes."
+            ),
+        },
+        timeout=20,
+    )
+    if response.status_code not in {200, 201}:
+        logger.error("GitHub issue creation failed: %s %s", response.status_code, response.text)
+        send_reply(logger, chat_id, "GitHub could not create the feature request. Check the Render logs.")
+        return
+
+    issue = response.json()
+    send_reply(
+        logger,
+        chat_id,
+        "Feature request #" + str(issue["number"]) + " created:\n" + issue["html_url"] +
+        "\n\nOpen this issue in Codex on your computer and ask it to implement the feature as a tested PR.",
+    )
 
 def command_reply(text: str, db: Session) -> str | None:
     command, _, argument = text.strip().partition(" ")
@@ -48,8 +75,7 @@ def command_reply(text: str, db: Session) -> str | None:
             "/setmessage <text> — change the app message\n"
             "/enable — enable the app feature\n"
             "/disable — disable the app feature\n"
-            "/feature <request> — create a draft Android PR\n"
-            "/approve <PR number> — merge an approved PR and start the APK build"
+            "/feature <request> — create a GitHub feature request"
         )
     if command == "/config":
         config = read_config(db)
@@ -65,15 +91,7 @@ def command_reply(text: str, db: Session) -> str | None:
     if command == "/disable":
         set_enabled(db, False)
         return "App feature disabled."
-    if command == "/approve":
-        if not argument.strip().isdigit():
-            return "Usage: /approve <PR number>"
-        try:
-            actions_url = FeatureAgent(logger).approve_after_successful_build(int(argument.strip()))
-            return "PR #" + argument.strip() + " passed Android validation and was merged. APK build:\n" + actions_url
-        except Exception:
-            logger.exception("Telegram PR approval failed")
-            return "The PR was not merged. Review it in GitHub, mark it ready, and resolve any conflicts first."
+
     return None
 
 
@@ -117,8 +135,8 @@ def telegram_webhook(update: TelegramUpdate, background_tasks: BackgroundTasks, 
         if len(argument.strip()) < 8:
             reply = "Usage: /feature Describe the Android feature you want"
         else:
-            background_tasks.add_task(create_feature_in_background, chat_id, argument.strip())
-            reply = "Feature request received. I will send the draft PR link here when it is ready."
+            background_tasks.add_task(create_feature_request_in_background, chat_id, argument.strip())
+            reply = "Feature request received. I will send the GitHub issue link here shortly."
     else:
         reply = command_reply(text, db)
         if reply is None:
