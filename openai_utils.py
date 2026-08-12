@@ -1,3 +1,4 @@
+import json
 import re
 from openai import OpenAI
 from config import OPENAI_API_KEY, OPENAI_MODEL
@@ -76,6 +77,31 @@ class OpenAIClient:
             ],
         )
         return self._normalize_patch_reply(response.output_text)
+
+    def get_file_changes(self, prompt):
+        if not self.client:
+            raise RuntimeError("OpenAI API key is not configured")
+        response = self.client.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You generate safe Android source-file replacements. Return JSON only, with exactly "
+                        'this shape: {"files":[{"path":"app/src/...","content":"complete file content"}]}. '
+                        "Do not include Markdown or explanations. Never include deletions."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        try:
+            payload = json.loads(response.output_text.strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("The code generator did not return valid JSON") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("files"), list):
+            raise RuntimeError("The code generator response is missing files")
+        return payload["files"]
 
     def extract_code_from_reply(self, reply):
         code_blocks = re.findall(r"```(?:\w+)?\s*(.*?)```", reply, re.DOTALL)
