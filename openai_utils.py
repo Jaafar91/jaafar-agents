@@ -87,13 +87,40 @@ class OpenAIClient:
                 {
                     "role": "system",
                     "content": (
-                        "You generate safe Android source-file replacements. Return JSON only, with exactly "
-                        'this shape: {"files":[{"path":"app/src/...","content":"complete file content"}]}. '
-                        "Do not include Markdown or explanations. Never include deletions."
+                        "You generate safe Android source-file replacements. Return complete file content "
+                        "for every requested change. Never include deletions."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "android_file_changes",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 5,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "path": {"type": "string"},
+                                        "content": {"type": "string"},
+                                    },
+                                    "required": ["path", "content"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": ["files"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
         )
         try:
             payload = json.loads(response.output_text.strip())
