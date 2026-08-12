@@ -69,8 +69,8 @@ def command_reply(text: str, db: Session) -> str | None:
         if not argument.strip().isdigit():
             return "Usage: /approve <PR number>"
         try:
-            actions_url = FeatureAgent(logger).approve_and_merge(int(argument.strip()))
-            return "PR #" + argument.strip() + " merged. GitHub is building the APK now:\n" + actions_url
+            actions_url = FeatureAgent(logger).approve_after_successful_build(int(argument.strip()))
+            return "PR #" + argument.strip() + " passed Android validation and was merged. APK build:\n" + actions_url
         except Exception:
             logger.exception("Telegram PR approval failed")
             return "The PR was not merged. Review it in GitHub, mark it ready, and resolve any conflicts first."

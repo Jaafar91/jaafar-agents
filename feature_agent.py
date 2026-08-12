@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -157,7 +158,7 @@ class FeatureAgent:
         item = response.json()
         return item["number"], item["html_url"]
 
-    def approve_and_merge(self, number):
+    def approve_after_successful_build(self, number):
         self._check_config()
         ready = requests.patch(
             "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number),
@@ -167,12 +168,40 @@ class FeatureAgent:
         )
         if ready.status_code != 200:
             raise RuntimeError("GitHub could not mark this PR ready for review")
-        response = requests.put(
-            "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number) + "/merge",
+
+        pull = requests.get(
+            "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number),
             headers=self._headers(),
-            json={"merge_method": "squash", "commit_title": "Merge Telegram feature PR #" + str(number)},
             timeout=20,
         )
-        if response.status_code != 200 or not response.json().get("merged"):
-            raise RuntimeError("GitHub did not merge this PR")
-        return "https://github.com/" + MOBILE_APP_REPOSITORY + "/actions"
+        if pull.status_code != 200:
+            raise RuntimeError("GitHub could not read this PR")
+        sha = pull.json()["head"]["sha"]
+
+        for _ in range(45):
+            runs = requests.get(
+                "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/actions/runs?head_sha=" + sha,
+                headers=self._headers(),
+                timeout=20,
+            )
+            if runs.status_code == 200:
+                matching = [
+                    run for run in runs.json().get("workflow_runs", [])
+                    if run.get("name") == "Android APK and Firebase distribution"
+                ]
+                if matching:
+                    run = matching[0]
+                    if run.get("status") == "completed":
+                        if run.get("conclusion") != "success":
+                            raise RuntimeError("Android validation failed: " + str(run.get("html_url")))
+                        merge = requests.put(
+                            "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" + str(number) + "/merge",
+                            headers=self._headers(),
+                            json={"merge_method": "squash", "commit_title": "Merge Telegram feature PR #" + str(number)},
+                            timeout=20,
+                        )
+                        if merge.status_code != 200 or not merge.json().get("merged"):
+                            raise RuntimeError("Build passed, but GitHub did not merge this PR")
+                        return run.get("html_url") or "https://github.com/" + MOBILE_APP_REPOSITORY + "/actions"
+            time.sleep(20)
+        raise RuntimeError("Timed out waiting for the Android validation build")
