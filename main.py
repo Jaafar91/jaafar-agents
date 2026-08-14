@@ -68,6 +68,41 @@ def create_feature_request_in_background(chat_id: int, request: str) -> None:
     )
 
 
+def merge_pull_request_in_background(chat_id: int, pull_request_number: int) -> None:
+    if is_placeholder(GITHUB_TOKEN):
+        send_reply(logger, chat_id, "GitHub is not configured. Set GITHUB_TOKEN in Render.")
+        return
+
+    pull_request_url = "https://github.com/" + MOBILE_APP_REPOSITORY + "/pull/" + str(pull_request_number)
+    try:
+        response = requests.put(
+            "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/pulls/" +
+            str(pull_request_number) + "/merge",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer " + GITHUB_TOKEN,
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={"merge_method": "squash"},
+            timeout=20,
+        )
+    except requests.RequestException:
+        logger.exception("GitHub pull request merge request failed")
+        send_reply(logger, chat_id, "GitHub could not be reached to merge PR #" + str(pull_request_number) + ".")
+        return
+
+    if response.status_code == 200 and response.json().get("merged"):
+        send_reply(logger, chat_id, "PR #" + str(pull_request_number) + " merged successfully.\n" + pull_request_url)
+        return
+
+    try:
+        message = response.json().get("message", "GitHub could not merge this pull request.")
+    except ValueError:
+        message = "GitHub could not merge this pull request."
+    logger.warning("GitHub merge failed for PR #%s: %s %s", pull_request_number, response.status_code, message)
+    send_reply(logger, chat_id, "PR #" + str(pull_request_number) + " was not merged: " + message + "\n" + pull_request_url)
+
+
 def command_reply(text: str, db: Session) -> str | None:
     command, _, argument = text.strip().partition(" ")
     command = command.split("@", 1)[0].lower()
@@ -78,7 +113,8 @@ def command_reply(text: str, db: Session) -> str | None:
             "/setmessage <text> — change the app message\n"
             "/enable — enable the app feature\n"
             "/disable — disable the app feature\n"
-            "/feature <request> — create a GitHub feature request"
+            "/feature <request> — create a GitHub feature request\n"
+            "/merge <PR number> — merge a pull request"
         )
     if command == "/config":
         config = read_config(db)
@@ -134,12 +170,20 @@ def telegram_webhook(update: TelegramUpdate, background_tasks: BackgroundTasks, 
         return {"ok": False, "error": "Telegram credentials are not configured"}
 
     command, _, argument = text.strip().partition(" ")
-    if command.split("@", 1)[0].lower() == "/feature":
+    command_name = command.split("@", 1)[0].lower()
+    if command_name == "/feature":
         if len(argument.strip()) < 8:
             reply = "Usage: /feature Describe the Android feature you want"
         else:
             background_tasks.add_task(create_feature_request_in_background, chat_id, argument.strip())
             reply = "Feature request received. I will send the GitHub issue link here shortly."
+    elif command_name == "/merge":
+        pull_request_number = argument.strip().lstrip("#")
+        if not pull_request_number.isdigit() or int(pull_request_number) < 1:
+            reply = "Usage: /merge <PR number>"
+        else:
+            background_tasks.add_task(merge_pull_request_in_background, chat_id, int(pull_request_number))
+            reply = "Merge request received. I will send the result here shortly."
     else:
         reply = command_reply(text, db)
         if reply is None:
