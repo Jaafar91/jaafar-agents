@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
-from config import GITHUB_TOKEN, MOBILE_APP_REPOSITORY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder, telegram_admin_chat_ids
+from config import GITHUB_COPILOT_TOKEN, GITHUB_TOKEN, MOBILE_APP_REPOSITORY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, is_placeholder, telegram_admin_chat_ids
 from database import get_db, init_db
 from github_webhook import notification_text, send_notification, signature_is_valid
 from mobile_config import read_config, set_enabled, set_message
@@ -32,7 +32,7 @@ def is_authorized(chat_id: int | None) -> bool:
     return chat_id is not None and str(chat_id) in telegram_admin_chat_ids()
 
 
-def create_feature_request_in_background(chat_id: int, request: str) -> None:
+def create_openai_feature_request_in_background(chat_id: int, request: str) -> None:
     if is_placeholder(GITHUB_TOKEN):
         send_reply(logger, chat_id, "GitHub is not configured. Set GITHUB_TOKEN in Render.")
         return
@@ -45,28 +45,78 @@ def create_feature_request_in_background(chat_id: int, request: str) -> None:
             "X-GitHub-Api-Version": "2022-11-28",
         },
         json={
-            "title": "Telegram feature: " + request[:72],
+            "title": "Telegram OpenAI feature: " + request[:72],
             "body": (
                 "Feature request received from an authorized Telegram administrator.\n\n"
                 "## Request\n" + request + "\n\n"
-                "Create and test a pull request from this issue. Do not merge until the Android build passes."
+                "Implement and test this Android feature, then create a pull request for review."
             ),
         },
         timeout=20,
     )
     if response.status_code not in {200, 201}:
-        logger.error("GitHub issue creation failed: %s %s", response.status_code, response.text)
-        send_reply(logger, chat_id, "GitHub could not create the feature request. Check the Render logs.")
+        logger.error("GitHub OpenAI feature issue creation failed: %s %s", response.status_code, response.text)
+        send_reply(logger, chat_id, "GitHub could not create the OpenAI feature request. Check the Render logs.")
         return
 
     issue = response.json()
     send_reply(
         logger,
         chat_id,
-        "Feature request #" + str(issue["number"]) + " created:\n" + issue["html_url"] +
-        "\n\nI will also send PR and Android build updates here after the GitHub webhook is configured.",
+        "OpenAI feature request #" + str(issue["number"]) + " created:\n" + issue["html_url"] +
+        "\n\nThe cloud OpenAI agent will create a pull request.",
     )
 
+
+def create_copilot_feature_request_in_background(chat_id: int, request: str) -> None:
+    if is_placeholder(GITHUB_COPILOT_TOKEN):
+        send_reply(logger, chat_id, "Copilot is not configured. Set GITHUB_COPILOT_TOKEN in Render.")
+        return
+
+    response = requests.post(
+        "https://api.github.com/repos/" + MOBILE_APP_REPOSITORY + "/issues",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + GITHUB_COPILOT_TOKEN,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={
+            "title": "Telegram Copilot feature: " + request[:72],
+            "body": (
+                "Feature request received from an authorized Telegram administrator.\n\n"
+                "## Request\n" + request + "\n\n"
+                "Implement this request in the Android app. Create a pull request for review."
+            ),
+            "assignees": ["copilot-swe-agent[bot]"],
+            "agent_assignment": {
+                "target_repo": MOBILE_APP_REPOSITORY,
+                "base_branch": "master",
+                "custom_instructions": (
+                    "Treat the issue as product requirements. Modify only Android application code. "
+                    "Do not change workflows, repository permissions, credentials, or dependencies. "
+                    "Run the Android build and create a pull request for review."
+                ),
+            },
+        },
+        timeout=20,
+    )
+    if response.status_code not in {200, 201}:
+        logger.error("GitHub Copilot issue assignment failed: %s %s", response.status_code, response.text)
+        send_reply(
+            logger,
+            chat_id,
+            "GitHub could not assign this request to Copilot. Check that Copilot is enabled "
+            "and GITHUB_COPILOT_TOKEN is a personal token with the required repository access.",
+        )
+        return
+
+    issue = response.json()
+    send_reply(
+        logger,
+        chat_id,
+        "Copilot feature request #" + str(issue["number"]) + " assigned to Copilot:\n" + issue["html_url"] +
+        "\n\nCopilot will create a pull request and I will send status updates here.",
+    )
 
 def merge_pull_request_in_background(chat_id: int, pull_request_number: int) -> None:
     if is_placeholder(GITHUB_TOKEN):
@@ -113,7 +163,8 @@ def command_reply(text: str, db: Session) -> str | None:
             "/setmessage <text> — change the app message\n"
             "/enable — enable the app feature\n"
             "/disable — disable the app feature\n"
-            "/feature <request> — create a GitHub feature request\n"
+            "/openai <request> — create an OpenAI feature request\n"
+            "/copilot <request> — create a Copilot feature request\n"
             "/merge <PR number> — merge a pull request"
         )
     if command == "/config":
@@ -171,12 +222,18 @@ def telegram_webhook(update: TelegramUpdate, background_tasks: BackgroundTasks, 
 
     command, _, argument = text.strip().partition(" ")
     command_name = command.split("@", 1)[0].lower()
-    if command_name == "/feature":
+    if command_name in {"/feature", "/openai"}:
         if len(argument.strip()) < 8:
-            reply = "Usage: /feature Describe the Android feature you want"
+            reply = "Usage: /openai Describe the Android feature you want"
         else:
-            background_tasks.add_task(create_feature_request_in_background, chat_id, argument.strip())
-            reply = "Feature request received. I will send the GitHub issue link here shortly."
+            background_tasks.add_task(create_openai_feature_request_in_background, chat_id, argument.strip())
+            reply = "OpenAI feature request received. I will send the GitHub issue link here shortly."
+    elif command_name == "/copilot":
+        if len(argument.strip()) < 8:
+            reply = "Usage: /copilot Describe the Android feature you want"
+        else:
+            background_tasks.add_task(create_copilot_feature_request_in_background, chat_id, argument.strip())
+            reply = "Copilot feature request received. I will send the GitHub issue link here shortly."
     elif command_name == "/merge":
         pull_request_number = argument.strip().lstrip("#")
         if not pull_request_number.isdigit() or int(pull_request_number) < 1:
