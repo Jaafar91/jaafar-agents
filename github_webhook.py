@@ -3,7 +3,13 @@ import hmac
 import logging
 from typing import Any
 
-from config import GITHUB_WEBHOOK_SECRET, MOBILE_APP_REPOSITORY, is_placeholder, telegram_admin_chat_ids
+from config import (
+    GITHUB_WEBHOOK_SECRET,
+    MOBILE_APP_REPOSITORY,
+    QUOTATION_APP_REPOSITORY,
+    is_placeholder,
+    telegram_admin_chat_ids,
+)
 from telegram_utils import send_reply
 
 
@@ -20,10 +26,19 @@ def signature_is_valid(body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def app_label(repository: str | None) -> str | None:
+    if repository == MOBILE_APP_REPOSITORY:
+        return "Font Creator"
+    if repository == QUOTATION_APP_REPOSITORY:
+        return "Quick Quote"
+    return None
+
+
 def notification_text(event: str, payload: dict[str, Any]) -> str | None:
-    """Return a concise Telegram update for selected Android-repository events."""
+    """Return a concise Telegram update for supported app-repository events."""
     repository = payload.get("repository", {}).get("full_name")
-    if repository != MOBILE_APP_REPOSITORY:
+    label = app_label(repository)
+    if label is None:
         return None
 
     if event == "pull_request":
@@ -34,15 +49,12 @@ def notification_text(event: str, payload: dict[str, Any]) -> str | None:
         url = pull_request.get("html_url")
 
         if action in {"opened", "reopened", "ready_for_review"}:
-            return f"GitHub PR #{number} is ready for review:\n{title}\n{url}"
+            return f"{label} PR #{number} is ready for review:\n{title}\n{url}"
 
         if action == "closed":
             if pull_request.get("merged"):
-                return (
-                    f"GitHub PR #{number} was merged. "
-                    f"An Android APK build should start shortly.\n{url}"
-                )
-            return f"GitHub PR #{number} was closed without merging.\n{url}"
+                return f"{label} PR #{number} was merged. A build should start shortly.\n{url}"
+            return f"{label} PR #{number} was closed without merging.\n{url}"
 
     if event == "workflow_run" and payload.get("action") == "completed":
         workflow_run = payload.get("workflow_run", {})
@@ -51,12 +63,9 @@ def notification_text(event: str, payload: dict[str, Any]) -> str | None:
         url = workflow_run.get("html_url")
 
         if conclusion == "success":
-            return (
-                f"Android build passed ({name}).\n"
-                f"Download the APK from this run under Artifacts:\n{url}"
-            )
+            return f"{label} build passed ({name}).\nDownload the build from Artifacts:\n{url}"
         if conclusion in {"failure", "cancelled", "timed_out", "action_required"}:
-            return f"Android build did not complete successfully ({conclusion}).\n{url}"
+            return f"{label} build did not complete successfully ({conclusion}).\n{url}"
 
     return None
 
