@@ -114,7 +114,7 @@ def merge_pull_request(chat_id: int, number: int, repository: str, app_name: str
 def help_text() -> str:
     return (
         "Font Creator Android:\n"
-        "/openai <request>\n/coplanar <request>\n/merge <PR number>\n\n"
+        "/openai <request>\n/copilot <request>\n/merge <PR number>\n\n"
         "Quick Quote:\n"
         "/quote <request>\n/quote copilot <request>\n/quote merge <PR number>\n\n"
         "Font Creator iOS:\n"
