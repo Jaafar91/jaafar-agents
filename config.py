@@ -16,7 +16,11 @@ GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 GITHUB_COMMIT_NAME = os.getenv("GITHUB_COMMIT_NAME", "OpenAI Bot")
 GITHUB_COMMIT_EMAIL = os.getenv("GITHUB_COMMIT_EMAIL", "bot@example.com")
+
+# Existing Font Creator Android repository.
 MOBILE_APP_REPOSITORY = os.getenv("MOBILE_APP_REPOSITORY", "Jaafar91/jaafar-open-ai")
+# Quick Quote is a separate app and is controlled with /quote commands in Telegram.
+QUOTATION_APP_REPOSITORY = os.getenv("QUOTATION_APP_REPOSITORY", "Jaafar91/quotation-maker")
 
 
 def is_placeholder(value):
